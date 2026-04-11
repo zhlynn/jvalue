@@ -251,6 +251,8 @@ class jreader
 public:
 	jreader();
 
+	static const int MAX_DEPTH = 256;
+
 public:
 	bool	parse(const char* pdoc, jvalue& root);
 	void	error(string& strmsg) const;
@@ -306,6 +308,7 @@ private:
 	const char* m_pcursor;
 	const char* m_perror;
 	string		m_strerr;
+	int			m_depth;
 };
 
 class jwriter
@@ -449,12 +452,15 @@ private:
 public:
 	bool	parse_binary(const char* pbdoc, size_t len, jvalue& pv);
 
+	static const int MAX_DEPTH = 256;
+
 private:
 	uint32_t	_get_uint24_from_be(const char* v);
-	uint64_t	_get_uint_val(const char* v, size_t size);
+	bool		_get_uint_val_safe(const char* v, size_t size, uint64_t& out);
 	bool		_read_uint_size(const char*& pcur, size_t& size);
 	bool		_read_binary_value(const char*& pcur, jvalue& pv);
 	bool		_read_unicode(const char* pcur, size_t size, jvalue& pv);
+	bool		_bp_in_bounds(const char* p, size_t n) const;
 
 private: //xml
 	const char* m_pbegin;
@@ -462,6 +468,7 @@ private: //xml
 	const char* m_pcursor;
 	const char* m_perror;
 	string		m_strerr;
+	int			m_depth;
 
 private: //binary
 	const char* m_ptrailer;
