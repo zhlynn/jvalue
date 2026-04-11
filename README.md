@@ -1,6 +1,6 @@
 # jvalue
 
-A single-header-style C++11 value container with serialization to **JSON** and Apple **Property List** (both XML `plist` and binary `bplist`). One in-memory representation (`jvalue`), four readers/writers, zero external dependencies.
+A single-header-style C++ value container with serialization to **JSON** and Apple **Property List** (both XML `plist` and binary `bplist`). One in-memory representation (`jvalue`), four readers/writers, zero external dependencies.
 
 ## Features
 
@@ -9,7 +9,7 @@ A single-header-style C++11 value container with serialization to **JSON** and A
 - Apple plist read/write — XML and binary `bplist` share the same `jvalue` tree
 - Auto-vivifying `operator[]` for ergonomic construction
 - Built-in Base64 helper (`jbase64`) for binary data fields
-- Pure C++11, standard library only, builds with `g++` / `clang++` / MSVC
+- Pure C++98, standard library only, builds with `g++` / `clang++` / MSVC
 
 ## Build
 
@@ -20,7 +20,7 @@ make clean
 
 Or drop `src/json.{h,cpp}` and `src/base64.{h,cpp}` into your own project — no other files are required.
 
-Requirements: a C++11 compiler. The Makefile uses `g++ -Wall -O2 -std=c++11`.
+Requirements: any C++98 (or newer) compiler. The Makefile uses `g++ -Wall -O2 -std=gnu++98`.
 
 ## Quick start
 
