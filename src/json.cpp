@@ -558,7 +558,7 @@ jvalue& jvalue::operator[](const char* key)
 const jvalue& jvalue::operator[](const char* key) const
 {
 	if (E_OBJECT == m_type && NULL != m_value.p_object) {
-		auto it = m_value.p_object->find(key);
+		map<string, jvalue>::const_iterator it = m_value.p_object->find(key);
 		if (it != m_value.p_object->end()) {
 			return it->second;
 		}
@@ -656,8 +656,8 @@ bool jvalue::_map_keys(vector<string>& keys) const
 {
 	if (E_OBJECT == m_type && NULL != m_value.p_object) {
 		keys.reserve(m_value.p_object->size());
-		auto itbeg = m_value.p_object->begin();
-		auto itend = m_value.p_object->end();
+		map<string, jvalue>::const_iterator itbeg = m_value.p_object->begin();
+		map<string, jvalue>::const_iterator itend = m_value.p_object->end();
 		for (; itbeg != itend; itbeg++) {
 			keys.push_back((itbeg->first).c_str());
 		}
@@ -732,7 +732,9 @@ jvalue& jvalue::back()
 		}
 	} else if (E_OBJECT == m_type) {
 		if (size() > 0) {
-			return prev(m_value.p_object->end())->second;
+			map<string, jvalue>::iterator it = m_value.p_object->end();
+			--it;
+			return it->second;
 		}
 	}
 	return (*this);
@@ -742,7 +744,8 @@ bool jvalue::append(jvalue& jv)
 {
 	if ((E_OBJECT == m_type || E_NULL == m_type) && E_OBJECT == jv.type()) {
 		if (NULL != jv.m_value.p_object) {
-			for (auto it = jv.m_value.p_object->begin(); it != jv.m_value.p_object->end(); ++it) {
+			map<string, jvalue>::const_iterator it = jv.m_value.p_object->begin();
+			for (; it != jv.m_value.p_object->end(); ++it) {
 				(*this)[it->first.c_str()] = it->second;
 			}
 		}
@@ -1238,7 +1241,7 @@ bool jreader::_read_value(jvalue& jval)
 		return _add_error("nested too deep", m_pcursor);
 	}
 	++m_depth;
-	struct DepthGuard { int* d; ~DepthGuard() { --(*d); } } guard{&m_depth};
+	struct DepthGuard { int* d; DepthGuard(int* p) : d(p) {} ~DepthGuard() { --(*d); } } guard(&m_depth);
 
 	jtoken token;
 	_read_token(token);
@@ -1591,22 +1594,24 @@ bool jreader::_decode_string(jtoken& token, string& strdec)
 					if (pend - pcur < 4) {
 						return _add_error("Bad \\u escape: truncated", pcur);
 					}
-					auto hex4 = [](const char* p, unsigned int& out) -> bool {
-						unsigned int v = 0;
-						for (int k = 0; k < 4; ++k) {
-							char ch = p[k];
-							unsigned int d;
-							if (ch >= '0' && ch <= '9') d = (unsigned int)(ch - '0');
-							else if (ch >= 'a' && ch <= 'f') d = (unsigned int)(ch - 'a' + 10);
-							else if (ch >= 'A' && ch <= 'F') d = (unsigned int)(ch - 'A' + 10);
-							else return false;
-							v = (v << 4) | d;
+					struct hex4_helper {
+						static bool run(const char* p, unsigned int& out) {
+							unsigned int v = 0;
+							for (int k = 0; k < 4; ++k) {
+								char ch = p[k];
+								unsigned int d;
+								if (ch >= '0' && ch <= '9') d = (unsigned int)(ch - '0');
+								else if (ch >= 'a' && ch <= 'f') d = (unsigned int)(ch - 'a' + 10);
+								else if (ch >= 'A' && ch <= 'F') d = (unsigned int)(ch - 'A' + 10);
+								else return false;
+								v = (v << 4) | d;
+							}
+							out = v;
+							return true;
 						}
-						out = v;
-						return true;
 					};
 					unsigned int cp = 0;
-					if (!hex4(pcur, cp)) {
+					if (!hex4_helper::run(pcur, cp)) {
 						return _add_error("Bad \\u escape: not hex", pcur);
 					}
 					pcur += 4;
@@ -1618,7 +1623,7 @@ bool jreader::_decode_string(jtoken& token, string& strdec)
 							return _add_error("Unpaired high surrogate", pcur);
 						}
 						unsigned int low = 0;
-						if (!hex4(pcur + 2, low) || low < 0xDC00 || low > 0xDFFF) {
+						if (!hex4_helper::run(pcur + 2, low) || low < 0xDC00 || low > 0xDFFF) {
 							return _add_error("Invalid low surrogate", pcur);
 						}
 						cp = 0x10000 + ((cp - 0xD800) << 10) + (low - 0xDC00);
@@ -2182,7 +2187,7 @@ bool jpreader::_read_value(jvalue& pval, ptoken& token)
 		return _add_error("nested too deep", m_pcursor);
 	}
 	++m_depth;
-	struct DepthGuard { int* d; ~DepthGuard() { --(*d); } } guard{&m_depth};
+	struct DepthGuard { int* d; DepthGuard(int* p) : d(p) {} ~DepthGuard() { --(*d); } } guard(&m_depth);
 
 	switch (token.type) {
 	case ptoken::E_PTOKEN_TRUE:
@@ -2670,8 +2675,9 @@ bool jpreader::_read_binary_value(const char*& pcursor, jvalue& pv)
 	++m_depth;
 	struct DepthGuard {
 		int* d;
+		DepthGuard(int* p) : d(p) {}
 		~DepthGuard() { --(*d); }
-	} guard{&m_depth};
+	} guard(&m_depth);
 
 	if (!_bp_in_bounds(pcursor, 1)) {
 		return false;
