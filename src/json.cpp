@@ -88,6 +88,14 @@ jvalue::jvalue(const jvalue& other)
 	_copy_value(other);
 }
 
+jvalue::jvalue(jvalue&& other) noexcept
+{
+	m_type = other.m_type;
+	m_value = other.m_value;
+	other.m_type = E_NULL;
+	::memset(&other.m_value, 0, sizeof(other.m_value));
+}
+
 jvalue::jvalue(const char* val, size_t len)
 {
 	m_type = E_DATA;
@@ -252,63 +260,25 @@ void jvalue::_copy_value(const jvalue& src)
 void jvalue::_free()
 {
 	switch (m_type) {
-	case E_INT:
-	{
-		m_value.v_int64 = 0;
-	}
-	break;
-	case E_BOOL:
-	{
-		m_value.v_bool = false;
-	}
-	break;
-	case E_FLOAT:
-	{
-		m_value.v_double = 0.0;
-	}
-	break;
 	case E_STRING:
-	{
 		if (NULL != m_value.p_string) {
 			::free(m_value.p_string);
-			m_value.p_string = NULL;
 		}
-	}
-	break;
+		break;
 	case E_ARRAY:
-	{
-		if (NULL != m_value.p_array) {
-			delete m_value.p_array;
-			m_value.p_array = NULL;
-		}
-	}
-	break;
+		delete m_value.p_array;
+		break;
 	case E_OBJECT:
-	{
-		if (NULL != m_value.p_object) {
-			delete m_value.p_object;
-			m_value.p_object = NULL;
-		}
-
-	}
-	break;
-	case E_DATE:
-	{
-		m_value.v_date = 0;
-	}
-	break;
+		delete m_value.p_object;
+		break;
 	case E_DATA:
-	{
-		if (NULL != m_value.p_data) {
-			delete m_value.p_data;
-			m_value.p_data = NULL;
-		}
-	}
-	break;
+		delete m_value.p_data;
+		break;
 	default:
 		break;
 	}
 	m_type = E_NULL;
+	::memset(&m_value, 0, sizeof(m_value));
 }
 
 jvalue::jtype jvalue::type() const
@@ -480,6 +450,18 @@ jvalue& jvalue::operator=(const jvalue& other)
 	return (*this);
 }
 
+jvalue& jvalue::operator=(jvalue&& other) noexcept
+{
+	if (this != &other) {
+		_free();
+		m_type = other.m_type;
+		m_value = other.m_value;
+		other.m_type = E_NULL;
+		::memset(&other.m_value, 0, sizeof(other.m_value));
+	}
+	return (*this);
+}
+
 jvalue& jvalue::operator[](int index)
 {
 	return (*this)[(size_t)(index < 0 ? 0 : index)];
@@ -558,7 +540,7 @@ jvalue& jvalue::operator[](const char* key)
 const jvalue& jvalue::operator[](const char* key) const
 {
 	if (E_OBJECT == m_type && NULL != m_value.p_object) {
-		map<string, jvalue>::const_iterator it = m_value.p_object->find(key);
+		jvalue::flat_map::const_iterator it = m_value.p_object->find(key);
 		if (it != m_value.p_object->end()) {
 			return it->second;
 		}
@@ -656,8 +638,8 @@ bool jvalue::_map_keys(vector<string>& keys) const
 {
 	if (E_OBJECT == m_type && NULL != m_value.p_object) {
 		keys.reserve(m_value.p_object->size());
-		map<string, jvalue>::const_iterator itbeg = m_value.p_object->begin();
-		map<string, jvalue>::const_iterator itend = m_value.p_object->end();
+		jvalue::flat_map::const_iterator itbeg = m_value.p_object->begin();
+		jvalue::flat_map::const_iterator itend = m_value.p_object->end();
 		for (; itbeg != itend; itbeg++) {
 			keys.push_back((itbeg->first).c_str());
 		}
@@ -732,8 +714,7 @@ jvalue& jvalue::back()
 		}
 	} else if (E_OBJECT == m_type) {
 		if (size() > 0) {
-			map<string, jvalue>::iterator it = m_value.p_object->end();
-			--it;
+			jvalue::flat_map::iterator it = m_value.p_object->begin();
 			return it->second;
 		}
 	}
@@ -744,7 +725,7 @@ bool jvalue::append(jvalue& jv)
 {
 	if ((E_OBJECT == m_type || E_NULL == m_type) && E_OBJECT == jv.type()) {
 		if (NULL != jv.m_value.p_object) {
-			map<string, jvalue>::const_iterator it = jv.m_value.p_object->begin();
+			jvalue::flat_map::const_iterator it = jv.m_value.p_object->begin();
 			for (; it != jv.m_value.p_object->end(); ++it) {
 				(*this)[it->first.c_str()] = it->second;
 			}
@@ -794,11 +775,16 @@ bool jvalue::push_back(const string& val)
 
 bool jvalue::push_back(const jvalue& jval)
 {
-	if (E_ARRAY == m_type || E_NULL == m_type) {
-		(*this)[size()] = jval;
-		return true;
+	if (E_ARRAY != m_type && E_NULL != m_type) {
+		return false;
 	}
-	return false;
+	if (E_ARRAY != m_type || NULL == m_value.p_array) {
+		_free();
+		m_type = E_ARRAY;
+		m_value.p_array = new array();
+	}
+	m_value.p_array->push_back(jval);
+	return true;
 }
 
 bool jvalue::push_back(const char* val, size_t len)
@@ -1353,13 +1339,13 @@ bool jreader::_read_token(jtoken& token)
 
 void jreader::_skip_spaces()
 {
-	while (m_pcursor != m_pend) {
-		char c = *m_pcursor;
-		if (c == ' ' || c == '\t' || c == '\r' || c == '\n') {
-			m_pcursor++;
-		} else {
-			break;
-		}
+	static const uint8_t ws[256] = {
+		0,0,0,0,0,0,0,0,0,1,1,0,0,1,0,0,
+		0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+		1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+	};
+	while (m_pcursor != m_pend && ws[(uint8_t)*m_pcursor]) {
+		m_pcursor++;
 	}
 }
 
@@ -1555,113 +1541,99 @@ bool jreader::_decode_double(jtoken& token, jvalue& jval)
 
 bool jreader::_decode_string(jtoken& token, string& strdec)
 {
-	strdec = "";
+	strdec.clear();
 	const char* pcur = token.pbegin + 1;
 	const char* pend = token.pend - 1;
-	strdec.reserve(size_t(token.pend - token.pbegin));
+	strdec.reserve(size_t(pend - pcur));
+
 	while (pcur != pend) {
-		char c = *pcur++;
-		if ('\\' == c) {
-			if (pcur != pend) {
-				char escape = *pcur++;
-				switch (escape) {
-				case '"':
-					strdec += '"';
-					break;
-				case '\\':
-					strdec += '\\';
-					break;
-				case 'b':
-					strdec += '\b';
-					break;
-				case 'f':
-					strdec += '\f';
-					break;
-				case 'n':
-					strdec += '\n';
-					break;
-				case 'r':
-					strdec += '\r';
-					break;
-				case 't':
-					strdec += '\t';
-					break;
-				case '/':
-					strdec += '/';
-					break;
-				case 'u':
-				{
-					if (pend - pcur < 4) {
-						return _add_error("Bad \\u escape: truncated", pcur);
-					}
-					struct hex4_helper {
-						static bool run(const char* p, unsigned int& out) {
-							unsigned int v = 0;
-							for (int k = 0; k < 4; ++k) {
-								char ch = p[k];
-								unsigned int d;
-								if (ch >= '0' && ch <= '9') d = (unsigned int)(ch - '0');
-								else if (ch >= 'a' && ch <= 'f') d = (unsigned int)(ch - 'a' + 10);
-								else if (ch >= 'A' && ch <= 'F') d = (unsigned int)(ch - 'A' + 10);
-								else return false;
-								v = (v << 4) | d;
-							}
-							out = v;
-							return true;
-						}
-					};
-					unsigned int cp = 0;
-					if (!hex4_helper::run(pcur, cp)) {
-						return _add_error("Bad \\u escape: not hex", pcur);
-					}
-					pcur += 4;
+		// Bulk copy: scan for next backslash or end
+		const char* chunk_start = pcur;
+		while (pcur != pend && *pcur != '\\') {
+			++pcur;
+		}
+		if (pcur != chunk_start) {
+			strdec.append(chunk_start, (size_t)(pcur - chunk_start));
+		}
+		if (pcur == pend) break;
 
-					// Surrogate pair handling.
-					if (cp >= 0xD800 && cp <= 0xDBFF) {
-						// high surrogate; need \uXXXX low surrogate next.
-						if (pend - pcur < 6 || pcur[0] != '\\' || pcur[1] != 'u') {
-							return _add_error("Unpaired high surrogate", pcur);
-						}
-						unsigned int low = 0;
-						if (!hex4_helper::run(pcur + 2, low) || low < 0xDC00 || low > 0xDFFF) {
-							return _add_error("Invalid low surrogate", pcur);
-						}
-						cp = 0x10000 + ((cp - 0xD800) << 10) + (low - 0xDC00);
-						pcur += 6;
-					} else if (cp >= 0xDC00 && cp <= 0xDFFF) {
-						return _add_error("Unexpected low surrogate", pcur);
-					}
-
-					if (cp <= 0x7F) {
-						strdec += (char)cp;
-					} else if (cp <= 0x7FF) {
-						strdec += (char)(0xC0 | ((cp >> 6) & 0x1F));
-						strdec += (char)(0x80 | (cp & 0x3F));
-					} else if (cp <= 0xFFFF) {
-						strdec += (char)(0xE0 | ((cp >> 12) & 0x0F));
-						strdec += (char)(0x80 | ((cp >> 6) & 0x3F));
-						strdec += (char)(0x80 | (cp & 0x3F));
-					} else if (cp <= 0x10FFFF) {
-						strdec += (char)(0xF0 | ((cp >> 18) & 0x07));
-						strdec += (char)(0x80 | ((cp >> 12) & 0x3F));
-						strdec += (char)(0x80 | ((cp >> 6) & 0x3F));
-						strdec += (char)(0x80 | (cp & 0x3F));
-					} else {
-						return _add_error("Codepoint out of range", pcur);
-					}
-				}
-				break;
-				default:
-					return _add_error("Bad escape sequence in string", pcur);
-					break;
-				}
-			} else {
-				return _add_error("Empty escape sequence in string", pcur);
+		// Handle escape sequence
+		++pcur; // skip backslash
+		if (pcur == pend) {
+			return _add_error("Empty escape sequence in string", pcur);
+		}
+		char escape = *pcur++;
+		switch (escape) {
+		case '"':  strdec += '"'; break;
+		case '\\': strdec += '\\'; break;
+		case 'b':  strdec += '\b'; break;
+		case 'f':  strdec += '\f'; break;
+		case 'n':  strdec += '\n'; break;
+		case 'r':  strdec += '\r'; break;
+		case 't':  strdec += '\t'; break;
+		case '/':  strdec += '/'; break;
+		case 'u':
+		{
+			if (pend - pcur < 4) {
+				return _add_error("Bad \\u escape: truncated", pcur);
 			}
-		} else if ('"' == c) {
-			break;
-		} else {
-			strdec += c;
+			struct hex4_helper {
+				static bool run(const char* p, unsigned int& out) {
+					unsigned int v = 0;
+					for (int k = 0; k < 4; ++k) {
+						char ch = p[k];
+						unsigned int d;
+						if (ch >= '0' && ch <= '9') d = (unsigned int)(ch - '0');
+						else if (ch >= 'a' && ch <= 'f') d = (unsigned int)(ch - 'a' + 10);
+						else if (ch >= 'A' && ch <= 'F') d = (unsigned int)(ch - 'A' + 10);
+						else return false;
+						v = (v << 4) | d;
+					}
+					out = v;
+					return true;
+				}
+			};
+			unsigned int cp = 0;
+			if (!hex4_helper::run(pcur, cp)) {
+				return _add_error("Bad \\u escape: not hex", pcur);
+			}
+			pcur += 4;
+
+			if (cp >= 0xD800 && cp <= 0xDBFF) {
+				if (pend - pcur < 6 || pcur[0] != '\\' || pcur[1] != 'u') {
+					return _add_error("Unpaired high surrogate", pcur);
+				}
+				unsigned int low = 0;
+				if (!hex4_helper::run(pcur + 2, low) || low < 0xDC00 || low > 0xDFFF) {
+					return _add_error("Invalid low surrogate", pcur);
+				}
+				cp = 0x10000 + ((cp - 0xD800) << 10) + (low - 0xDC00);
+				pcur += 6;
+			} else if (cp >= 0xDC00 && cp <= 0xDFFF) {
+				return _add_error("Unexpected low surrogate", pcur);
+			}
+
+			if (cp <= 0x7F) {
+				strdec += (char)cp;
+			} else if (cp <= 0x7FF) {
+				strdec += (char)(0xC0 | ((cp >> 6) & 0x1F));
+				strdec += (char)(0x80 | (cp & 0x3F));
+			} else if (cp <= 0xFFFF) {
+				strdec += (char)(0xE0 | ((cp >> 12) & 0x0F));
+				strdec += (char)(0x80 | ((cp >> 6) & 0x3F));
+				strdec += (char)(0x80 | (cp & 0x3F));
+			} else if (cp <= 0x10FFFF) {
+				strdec += (char)(0xF0 | ((cp >> 18) & 0x07));
+				strdec += (char)(0x80 | ((cp >> 12) & 0x3F));
+				strdec += (char)(0x80 | ((cp >> 6) & 0x3F));
+				strdec += (char)(0x80 | (cp & 0x3F));
+			} else {
+				return _add_error("Codepoint out of range", pcur);
+			}
+		}
+		break;
+		default:
+			return _add_error("Bad escape sequence in string", pcur);
 		}
 	}
 	return true;
@@ -1710,7 +1682,8 @@ jwriter::jwriter()
 // //////////////////////////////////////////////////////////////////
 void jwriter::write(const jvalue& jval, string& strdoc)
 {
-	strdoc = "";
+	strdoc.clear();
+	strdoc.reserve(4096);
 	_write_value(jval, strdoc);
 }
 
@@ -1721,14 +1694,22 @@ void jwriter::_write_value(const jvalue& jval, string& strdoc)
 		strdoc += "null";
 		break;
 	case jvalue::E_INT:
-		strdoc += v2s(jval.as_int64());
-		break;
+	{
+		char buf[32];
+		snprintf(buf, 32, "%" PRId64, jval.as_int64());
+		strdoc += buf;
+	}
+	break;
 	case jvalue::E_BOOL:
 		strdoc += jval.as_bool() ? "true" : "false";
 		break;
 	case jvalue::E_FLOAT:
-		strdoc += v2s(jval.as_double());
-		break;
+	{
+		char buf[128];
+		snprintf(buf, 128, "%g", jval.as_double());
+		strdoc += buf;
+	}
+	break;
 	case jvalue::E_STRING:
 		strdoc += v2s(jval.as_cstr());
 		break;
@@ -1737,7 +1718,7 @@ void jwriter::_write_value(const jvalue& jval, string& strdoc)
 		strdoc += "[";
 		size_t usize = jval.size();
 		for (size_t i = 0; i < usize; i++) {
-			strdoc += (i > 0) ? "," : "";
+			if (i > 0) strdoc += ",";
 			_write_value(jval[i], strdoc);
 		}
 		strdoc += "]";
@@ -1750,10 +1731,10 @@ void jwriter::_write_value(const jvalue& jval, string& strdoc)
 		jval.get_keys(keys);
 		size_t num_key = keys.size();
 		for (size_t i = 0; i < num_key; i++) {
-			const string& key_name = keys[i];
-			strdoc += (i > 0) ? "," : "";
-			strdoc += v2s(key_name.c_str()) + ":";
-			_write_value(jval[key_name.c_str()], strdoc);
+			if (i > 0) strdoc += ",";
+			strdoc += v2s(keys[i].c_str());
+			strdoc += ":";
+			_write_value(jval[keys[i]], strdoc);
 		}
 		strdoc += "}";
 	}
@@ -2022,7 +2003,8 @@ string jwriter::v2s(const char* pstr)
 
 void jwriter::write_to_html(const jvalue& jval, string& strdoc)
 {
-	strdoc = "";
+	strdoc.clear();
+	strdoc.reserve(4096);
 	_write_value_to_html(jval, strdoc);
 	strdoc += "\n";
 }
@@ -2389,13 +2371,13 @@ bool jpreader::_read_token(ptoken& token)
 
 void jpreader::_skip_spaces()
 {
-	while (m_pcursor != m_pend) {
-		char c = *m_pcursor;
-		if (c == ' ' || c == '\t' || c == '\r' || c == '\n') {
-			m_pcursor++;
-		} else {
-			break;
-		}
+	static const uint8_t ws[256] = {
+		0,0,0,0,0,0,0,0,0,1,1,0,0,1,0,0,
+		0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+		1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+	};
+	while (m_pcursor != m_pend && ws[(uint8_t)*m_pcursor]) {
+		m_pcursor++;
 	}
 }
 
@@ -2535,11 +2517,19 @@ bool jpreader::_decode_string(ptoken& token, string& strdec)
 {
 	const char* pcursor = token.pbegin;
 	const char* pend = token.pend;
-	strdec.reserve(size_t(token.pend - token.pbegin) + 6);
+	strdec.clear();
+	strdec.reserve(size_t(pend - pcursor));
+
 	while (pcursor != pend) {
-		char c = *pcursor++;
-		if ('\n' != c && '\r' != c && '\t' != c) {
-			strdec += c;
+		const char* chunk_start = pcursor;
+		while (pcursor != pend && *pcursor != '\n' && *pcursor != '\r' && *pcursor != '\t') {
+			++pcursor;
+		}
+		if (pcursor != chunk_start) {
+			strdec.append(chunk_start, (size_t)(pcursor - chunk_start));
+		}
+		if (pcursor != pend) {
+			++pcursor;
 		}
 	}
 	return true;

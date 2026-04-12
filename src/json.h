@@ -21,13 +21,13 @@ typedef unsigned long		ulong;
 
 #endif
 
-#include <map>
 #include <vector>
 #include <string>
 using namespace std;
 
 class jvalue
 {
+	class flat_map;
 public:
 	enum jtype
 	{
@@ -53,6 +53,9 @@ public:
 	jvalue(const jvalue& other);
 	jvalue(const char* val, size_t len);
 	~jvalue();
+
+	jvalue(jvalue&& other) noexcept;
+	jvalue& operator=(jvalue&& other) noexcept;
 
 public:
 	int			as_int()	const;
@@ -196,7 +199,7 @@ public:
 
 private:
 	typedef vector<jvalue> array;
-	typedef map<string, jvalue> object;
+	typedef flat_map object;
 
 	union _hold
 	{
@@ -245,6 +248,212 @@ public:
 	bool			style_write_to_file(const char* path, ...);
 	bool			style_write_plist_to_file(const char* path, ...);
 };
+
+//////////////////////////////////////////////////////////////////////////
+// Custom ordered map: raw entry array (insertion order) + open-addressing hash
+// - Small objects (< 32 keys): linear scan, zero hash overhead
+// - Large objects: int32_t[] hash table with linear probing (~8 bytes/entry)
+// - Preserves insertion order, minimal memory footprint
+
+class jvalue::flat_map {
+	static const uint32_t HASH_THRESHOLD = 32;
+	static const int32_t EMPTY_SLOT = -1;
+
+public:
+	struct entry { string first; jvalue second; };
+	typedef entry* iterator;
+	typedef const entry* const_iterator;
+
+private:
+	entry*   m_entries;
+	int32_t* m_buckets;
+	uint32_t m_size;
+	uint32_t m_cap;
+	uint32_t m_bucket_count;
+
+	static uint32_t _fnv1a(const char* s, size_t len) {
+		uint32_t h = 2166136261u;
+		for (size_t i = 0; i < len; i++) { h ^= (uint8_t)s[i]; h *= 16777619u; }
+		return h;
+	}
+
+	void _grow() {
+		uint32_t nc = m_cap ? m_cap * 2 : 4;
+		entry* ne = (entry*)::malloc(sizeof(entry) * nc);
+		for (uint32_t i = 0; i < m_size; i++) {
+			new(&ne[i].first) string(std::move(m_entries[i].first));
+			new(&ne[i].second) jvalue(std::move(m_entries[i].second));
+			m_entries[i].first.~string();
+			m_entries[i].second.~jvalue();
+		}
+		::free(m_entries);
+		m_entries = ne;
+		m_cap = nc;
+	}
+
+	void _rehash() {
+		m_bucket_count = 64;
+		while (m_bucket_count < m_size * 2) m_bucket_count *= 2;
+		::free(m_buckets);
+		m_buckets = (int32_t*)::malloc(sizeof(int32_t) * m_bucket_count);
+		::memset(m_buckets, 0xFF, sizeof(int32_t) * m_bucket_count);
+		uint32_t mask = m_bucket_count - 1;
+		for (uint32_t i = 0; i < m_size; i++) {
+			uint32_t h = _fnv1a(m_entries[i].first.c_str(), m_entries[i].first.size()) & mask;
+			while (m_buckets[h] != EMPTY_SLOT) h = (h + 1) & mask;
+			m_buckets[h] = (int32_t)i;
+		}
+	}
+
+	int32_t _probe(const string& key) const {
+		if (!m_buckets) return -1;
+		uint32_t mask = m_bucket_count - 1;
+		uint32_t h = _fnv1a(key.c_str(), key.size()) & mask;
+		while (m_buckets[h] != EMPTY_SLOT) {
+			if (m_entries[m_buckets[h]].first == key) return m_buckets[h];
+			h = (h + 1) & mask;
+		}
+		return -1;
+	}
+
+public:
+	flat_map() : m_entries(NULL), m_buckets(NULL), m_size(0), m_cap(0), m_bucket_count(0) {}
+
+	~flat_map() {
+		for (uint32_t i = 0; i < m_size; i++) { m_entries[i].first.~string(); m_entries[i].second.~jvalue(); }
+		::free(m_entries);
+		::free(m_buckets);
+	}
+
+	flat_map(const flat_map& o) : m_entries(NULL), m_buckets(NULL), m_size(0), m_cap(0), m_bucket_count(0) {
+		if (o.m_size) {
+			m_cap = o.m_size;
+			m_entries = (entry*)::malloc(sizeof(entry) * m_cap);
+			for (uint32_t i = 0; i < o.m_size; i++) {
+				new(&m_entries[i].first) string(o.m_entries[i].first);
+				new(&m_entries[i].second) jvalue(o.m_entries[i].second);
+			}
+			m_size = o.m_size;
+			if (o.m_buckets) _rehash();
+		}
+	}
+
+	flat_map& operator=(const flat_map& o) {
+		if (this != &o) {
+			for (uint32_t i = 0; i < m_size; i++) { m_entries[i].first.~string(); m_entries[i].second.~jvalue(); }
+			::free(m_entries); ::free(m_buckets);
+			m_entries = NULL; m_buckets = NULL; m_size = 0; m_cap = 0; m_bucket_count = 0;
+			if (o.m_size) {
+				m_cap = o.m_size;
+				m_entries = (entry*)::malloc(sizeof(entry) * m_cap);
+				for (uint32_t i = 0; i < o.m_size; i++) {
+					new(&m_entries[i].first) string(o.m_entries[i].first);
+					new(&m_entries[i].second) jvalue(o.m_entries[i].second);
+				}
+				m_size = o.m_size;
+				if (o.m_buckets) _rehash();
+			}
+		}
+		return *this;
+	}
+
+	flat_map(flat_map&& o) noexcept
+		: m_entries(o.m_entries), m_buckets(o.m_buckets),
+		  m_size(o.m_size), m_cap(o.m_cap), m_bucket_count(o.m_bucket_count) {
+		o.m_entries = NULL; o.m_buckets = NULL;
+		o.m_size = 0; o.m_cap = 0; o.m_bucket_count = 0;
+	}
+
+	flat_map& operator=(flat_map&& o) noexcept {
+		if (this != &o) {
+			for (uint32_t i = 0; i < m_size; i++) { m_entries[i].first.~string(); m_entries[i].second.~jvalue(); }
+			::free(m_entries); ::free(m_buckets);
+			m_entries = o.m_entries; m_buckets = o.m_buckets;
+			m_size = o.m_size; m_cap = o.m_cap; m_bucket_count = o.m_bucket_count;
+			o.m_entries = NULL; o.m_buckets = NULL;
+			o.m_size = 0; o.m_cap = 0; o.m_bucket_count = 0;
+		}
+		return *this;
+	}
+
+	jvalue& operator[](const string& key) {
+		if (m_buckets) {
+			int32_t idx = _probe(key);
+			if (idx >= 0) return m_entries[idx].second;
+		} else {
+			for (uint32_t i = 0; i < m_size; i++) {
+				if (m_entries[i].first == key) return m_entries[i].second;
+			}
+		}
+		if (m_size == m_cap) _grow();
+		new(&m_entries[m_size].first) string(key);
+		new(&m_entries[m_size].second) jvalue();
+		m_size++;
+		if (!m_buckets && m_size >= HASH_THRESHOLD) {
+			_rehash();
+		} else if (m_buckets) {
+			if (m_size * 2 > m_bucket_count) { _rehash(); }
+			else {
+				uint32_t mask = m_bucket_count - 1;
+				uint32_t h = _fnv1a(key.c_str(), key.size()) & mask;
+				while (m_buckets[h] != EMPTY_SLOT) h = (h + 1) & mask;
+				m_buckets[h] = (int32_t)(m_size - 1);
+			}
+		}
+		return m_entries[m_size - 1].second;
+	}
+
+	const_iterator find(const string& key) const {
+		if (m_buckets) {
+			int32_t idx = _probe(key);
+			return (idx >= 0) ? m_entries + idx : m_entries + m_size;
+		}
+		for (uint32_t i = 0; i < m_size; i++) {
+			if (m_entries[i].first == key) return m_entries + i;
+		}
+		return m_entries + m_size;
+	}
+
+	iterator find(const string& key) {
+		if (m_buckets) {
+			int32_t idx = _probe(key);
+			return (idx >= 0) ? m_entries + idx : m_entries + m_size;
+		}
+		for (uint32_t i = 0; i < m_size; i++) {
+			if (m_entries[i].first == key) return m_entries + i;
+		}
+		return m_entries + m_size;
+	}
+
+	void erase(const string& key) {
+		int32_t idx = -1;
+		if (m_buckets) { idx = _probe(key); }
+		else { for (uint32_t i = 0; i < m_size; i++) { if (m_entries[i].first == key) { idx = (int32_t)i; break; } } }
+		if (idx < 0) return;
+		m_entries[idx].first.~string();
+		m_entries[idx].second.~jvalue();
+		for (uint32_t i = (uint32_t)idx; i + 1 < m_size; i++) {
+			new(&m_entries[i].first) string(std::move(m_entries[i+1].first));
+			new(&m_entries[i].second) jvalue(std::move(m_entries[i+1].second));
+			m_entries[i+1].first.~string();
+			m_entries[i+1].second.~jvalue();
+		}
+		m_size--;
+		if (m_buckets) {
+			if (m_size < HASH_THRESHOLD / 2) { ::free(m_buckets); m_buckets = NULL; m_bucket_count = 0; }
+			else _rehash();
+		}
+	}
+
+	size_t size() const { return m_size; }
+	bool empty() const { return 0 == m_size; }
+	iterator begin() { return m_entries; }
+	iterator end() { return m_entries + m_size; }
+	const_iterator begin() const { return m_entries; }
+	const_iterator end() const { return m_entries + m_size; }
+};
+
+//////////////////////////////////////////////////////////////////////////
 
 class jreader
 {
@@ -488,7 +697,7 @@ public:
 	void			write(const jvalue& pval, string& strdoc);
 	void			write_to_binary(const jvalue& pval, string& strdoc);
 	const string&	style_write(const jvalue& pval);
-	
+
 private:
 	struct bplist_object
 	{
