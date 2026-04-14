@@ -1,0 +1,6 @@
+.vscode
+*.dSYM
+test
+jvalue
+.build
+CLAUDE.md
