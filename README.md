@@ -10,7 +10,7 @@ A single-library C++11 value container with serialization to **JSON** and Apple 
 
 ## Why jvalue?
 
-- 📦 **Drop-in**: copy 4 files (`json.{h,cpp}`, `base64.{h,cpp}`) into any C++11 project
+- 📦 **Drop-in**: copy 2 files (`json.{h,cpp}`) into any C++11 project
 - 🍎 **Apple plist first-class**: read/write XML `.plist` **and** binary `.bplist` with auto-detect
 - 🧩 **One data model** for JSON and plist — parse JSON, save as bplist, or vice versa
 - 🪶 **Zero dependencies**, standard C++11, builds with GCC / Clang / MSVC
@@ -30,11 +30,11 @@ A single-library C++11 value container with serialization to **JSON** and Apple 
 
 ```sh
 make           # produces ./jvalue (demo binary)
-make test      # builds and links test suite
+make test      # builds the test suite (.build/test)
 make clean
 ```
 
-Or drop `src/json.{h,cpp}` and `src/base64.{h,cpp}` into your own project — no other files are required.
+Or drop `src/json.{h,cpp}` into your own project — no other files are required.
 
 Requirements: C++11 compiler. The Makefile uses `g++ -Wall -O2 -std=c++11`.
 
@@ -157,10 +157,11 @@ See `src/json.h` for the full surface.
 
 ```
 src/
-  json.h / json.cpp     # jvalue + flat_map + jreader/jwriter + jpreader/jpwriter
-  base64.h / base64.cpp # jbase64
-  main.cpp              # usage demo
+  json.h / json.cpp     # jvalue + flat_map + jreader/jwriter + jpreader/jpwriter + jbase64
+test/
   test.cpp              # 59-case test suite
+  benchmark.cpp         # performance benchmark
+main.cpp                # usage demo
 Makefile
 ```
 

@@ -10,7 +10,7 @@
 
 ## 为什么选择 jvalue？
 
-- 📦 **即插即用**：只需将 4 个文件（`json.{h,cpp}`、`base64.{h,cpp}`）拷入任意 C++11 项目
+- 📦 **即插即用**：只需将 2 个文件（`json.{h,cpp}`）拷入任意 C++11 项目
 - 🍎 **完整的 Apple plist 支持**：XML `.plist` 与二进制 `.bplist` 读写，自动识别格式
 - 🧩 **统一数据模型**：JSON 与 plist 共用 `jvalue` 树，可以解析 JSON 后直接保存为 bplist，反之亦然
 - 🪶 **零依赖**，标准 C++11，可使用 GCC / Clang / MSVC 构建
@@ -30,11 +30,11 @@
 
 ```sh
 make           # 生成 ./jvalue 演示程序
-make test      # 编译测试套件
+make test      # 编译测试套件（.build/test）
 make clean
 ```
 
-或者直接将 `src/json.{h,cpp}` 和 `src/base64.{h,cpp}` 拷入你自己的项目 —— 不需要其他文件。
+或者直接将 `src/json.{h,cpp}` 拷入你自己的项目 —— 不需要其他文件。
 
 编译要求：C++11 编译器。Makefile 使用 `g++ -Wall -O2 -std=c++11`。
 
@@ -157,10 +157,11 @@ time_t t = jv["created"].as_date();
 
 ```
 src/
-  json.h / json.cpp     # jvalue + flat_map + jreader/jwriter + jpreader/jpwriter
-  base64.h / base64.cpp # jbase64
-  main.cpp              # 使用示例
+  json.h / json.cpp     # jvalue + flat_map + jreader/jwriter + jpreader/jpwriter + jbase64
+test/
   test.cpp              # 59 个测试用例
+  benchmark.cpp         # 性能基准测试
+main.cpp                # 使用示例
 Makefile
 ```
 
